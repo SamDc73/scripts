@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+# Created by: samdc73 (github | twitter | instagram)
+# GitHub repo for other scripts: github.com/SamDc73/scripts
+# Brief:  one command to upgrade all your apps on Fedora and perform system maintenance
+
+
+update_dnf() {
+    run_command "sudo dnf upgrade -y"
+    run_command "sudo dnf clean all"
+}
+
+update_cargo() {
+    if command -v cargo >/dev/null 2>&1; then
+        run_command "cargo install-update -a"
+    else
+        log "Cargo not found, skipping Rust package updates"
+    fi
+}
+
+update_flatpak() {
+    if command -v flatpak >/dev/null 2>&1; then
+        run_command "flatpak update -y"
+    else
+        log "Flatpak not found, skipping Flatpak updates"
+    fi
+}
+
+update_firmware() {
+    if command -v fwupdmgr >/dev/null 2>&1; then
+        run_command "sudo fwupdmgr refresh --force"
+        run_command "sudo fwupdmgr update"
+    else
+        log "fwupdmgr not found, skipping firmware updates"
+    fi
+}
+
+update_grub() {    
+    run_command "sudo grub2-mkconfig -o /boot/grub2/grub.cfg"
+}
+
+update_distrobox() {
+    if command -v distrobox >/dev/null 2>&1; then
+        log "Updating distrobox container: ArchLinux"
+        if ! run_command "distrobox upgrade ArchLinux"; then
+            log "Error: distrobox upgrade for ArchLinux failed"
+            return 1
+        fi
+    else
+        log "distrobox not found, skipping container updates"
+    fi
+}
+
+main() {
+    log "Starting system update and maintenance"
+    
+    update_dnf || log "DNF update failed"
+    update_cargo || log "Cargo update failed"
+    update_flatpak || log "Flatpak update failed"
+    update_firmware || log "Firmware update failed"
+    update_grub || log "System maintenance failed"
+    update_distrobox || log "Distrobox update failed"
+
+    log "System update and maintenance completed"
+}
+
+main
