@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+# Editied by: samdc73 (github | tiwtter | samdc73.com)
+# Created by: UNKNOWN
+# github repo for other scripts: github.com/SamDc73/scripts
+# despendecies: flatpak
+# brief: run after you install a flatpak app to copy your theme files to it 
+
+for dir in "$HOME"/.var/app/*/
+do
+    confdir="${dir}config/gtk-3.0"
+    mkdir -p "$confdir"
+    cp -r "$HOME"/.config/gtk-3.0/settings.ini "$confdir"/settings.ini
+done
