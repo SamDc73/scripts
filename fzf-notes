@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+
+# Edited by: samdc73 (github | twitter | samdc73.com)
+# Created by: Aaron Lichtman -- https://github.com/alichtman
+# dependencies: fzf, bat, fzf-preview [can be found at https://github.com/SamDc73/scripts ]
+# brief: A script for quickly editing your notes.
+# github repo for other scripts: https://github.com/SamDc73/scripts
+# How to use it:
+# - Enter: Open file in editor
+# - Tab: Show additional options (delete, rename)
+# - Esc: Exit the application
+# set the variable $EDITOR to set your text Editor and $NOTES for your notes directory
+
+# Use $NOTES if set, otherwise default to $HOME/Notes
+NOTES=${NOTES:-"$HOME/Notes"}
+
+# Ensure the NOTES directory exists
+mkdir -p "$NOTES"
+
+set -e
+new_file_creation_option="CREATE_NEW_FILE"
+
+main() {
+    cd "$NOTES"
+    touch "$new_file_creation_option"
+    previous_file="$1"
+    result=$(select_file "$previous_file")
+    
+    # Check if the result is empty (which happens when Esc is pressed)
+    if [ -z "$result" ]; then
+        echo "Exiting..."
+        exit 0
+    fi
+
+    action=$(echo "$result" | cut -d':' -f1)
+    file=$(echo "$result" | cut -d':' -f2-)
+
+    case "$action" in
+        "EDIT")
+            if [ "$file" == "$new_file_creation_option" ]; then
+                read -p "Enter a new file name: " new_file
+                touch_create_parent "$new_file"
+                file="$new_file"
+            fi
+            ${EDITOR:-vi} "$file"
+            ;;
+        "DELETE")
+            rm "$file"
+            echo "Deleted $file"
+            ;;
+        "RENAME")
+            read -p "Enter new name for $file: " new_name
+            mv "$file" "$new_name"
+            echo "Renamed $file to $new_name"
+            ;;
+        *)
+            echo "No action taken"
+            ;;
+    esac
+
+    rm -f "$new_file_creation_option"
+    main "$file"
+}
+
+touch_create_parent() {
+    mkdir -p "$(dirname "$1")" && touch "$1"
+}
+
+select_file() {
+    given_file="$1"
+    result=$(fzf --preview= --preview 'fzf-preview {}' --query="$given_file" \
+        --bind 'enter:accept' \
+        --bind 'tab:execute(echo TAB:{})' \
+        --bind 'esc:abort' \
+        --expect=enter,tab,esc)
+
+    key=$(head -1 <<< "$result")
+    file=$(tail -1 <<< "$result")
+
+    if [ "$key" = "esc" ]; then
+        echo ""
+    elif [ "$key" = "tab" ] && [ "$file" != "$new_file_creation_option" ]; then
+        action=$(printf "edit\ndelete\nrename" | fzf --prompt="Choose action for $file: " --bind 'esc:abort')
+        if [ -z "$action" ]; then
+            echo ""
+        else
+            case "$action" in
+                "delete")
+                    echo "DELETE:$file"
+                    ;;
+                "rename")
+                    echo "RENAME:$file"
+                    ;;
+                *)
+                    echo "EDIT:$file"
+                    ;;
+            esac
+        fi
+    else
+        echo "EDIT:$file"
+    fi
+}
+
+# Hook SIGINT to clean up
+trap cleanup EXIT INT TERM
+
+function cleanup () {
+    rm -f "$new_file_creation_option"
+}
+
+main ""
