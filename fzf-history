@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+
+# Created by Siddharth Dushantha 2020
+# dependencies: fzf, xdotool
+# github repo for other scripts: https://github.com/SamDc73/scripts
+
+output=$(fzf < "$HISTFILE")
+xdotool type --delay 0 "$output" &
