@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Created by: samdc73 (github | twitter | instagram)
+# Created by: samdc73 (github | twitter | samdc73.com)
 # GitHub repo for other scripts: github.com/SamDc73/scripts
 # Brief:  one command to upgrade all your apps on Fedora and perform system maintenance
 
@@ -39,17 +39,50 @@ update_grub() {
     run_command "sudo grub2-mkconfig -o /boot/grub2/grub.cfg"
 }
 
-update_distrobox() {
-    if command -v distrobox >/dev/null 2>&1; then
-        log "Updating distrobox container: ArchLinux"
-        if ! run_command "distrobox upgrade ArchLinux"; then
-            log "Error: distrobox upgrade for ArchLinux failed"
+# update_distrobox() {
+#     if command -v distrobox >/dev/null 2>&1; then
+#         log "Updating distrobox container: ArchLinux"
+#         if ! run_command "distrobox upgrade ArchLinux"; then
+#             log "Error: distrobox upgrade for ArchLinux failed"
+#             return 1
+#         fi
+#     else
+#         log "distrobox not found, skipping container updates"
+#     fi
+# }
+
+update_librechat() {
+    local librechat_dir="$HOME/Applications/librechat"
+    
+    if [ -d "$librechat_dir" ]; then
+        log "Updating LibreChat"
+                if ! cd "$librechat_dir"; then
+            log "Error: Unable to change to LibreChat directory"
             return 1
         fi
+                if ! run_command "git pull"; then
+            log "Error: Git pull failed"
+            return 1
+        fi
+                if ! run_command "docker compose down"; then
+            log "Error: Docker compose down failed"
+            return 1
+        fi
+                if ! run_command "docker compose pull"; then
+            log "Error: Docker compose pull failed"
+            return 1
+        fi
+                if ! run_command "docker compose up -d"; then
+            log "Error: Docker compose up failed"
+            return 1
+        fi
+        
+        log "LibreChat update completed successfully"
     else
-        log "distrobox not found, skipping container updates"
+        log "LibreChat directory not found at $librechat_dir"
     fi
 }
+
 
 main() {
     log "Starting system update and maintenance"
@@ -59,7 +92,7 @@ main() {
     update_flatpak || log "Flatpak update failed"
     update_firmware || log "Firmware update failed"
     update_grub || log "System maintenance failed"
-    update_distrobox || log "Distrobox update failed"
+    update_librechat || log "LibreChat update failed"
 
     log "System update and maintenance completed"
 }
