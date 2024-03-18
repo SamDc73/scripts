@@ -23,7 +23,7 @@ sudo ln -sfT /bin/dash /bin/sh
 # Fedora only
 #dnf config
 echo "max_parallel_downloads=10" | sudo tee -a /etc/dnf/dnf.conf
-echo "fastestmirror=True" | suod tee -a /etc/dnf/dnf.conf
+echo "fastestmirror=True" | sudo tee -a /etc/dnf/dnf.conf
 
 # KDE Connect
 # sudo firewall-cmd --permanent --zone=public --add-service=kdeconnect

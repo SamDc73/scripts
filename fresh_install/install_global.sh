@@ -1,47 +1,48 @@
-!#/bin/bash
+#!/bin/bash
 
-cargo install rbw leetcode-cli shellharden cargo-update
+# Exit on error
+# set -e
 
-python -m pip install --user flake8 pynvim ytmdl jupyterlab ipython stig pywal
+# Rust packages
+# cargo install shellharden cargo-update trashy rustpython
 
-npm install -g nativefier
+# Python packages
+# pipx install flake8 pynvim ytmdl stig pywal aider-chat tqdm
 
-########################################################
-###################### Build Apps ######################
-########################################################
-
-cd Applications
+# Build apps
+mkdir -p ~/Applications && cd ~/Applications
 
 # ytfzf
-it clone https://github.com/pystardust/ytfzf
-cd ytfzf
-sudo make install doc
+git clone https://github.com/pystardust/ytfzf
+cd ytfzf && sudo make install doc
 cd ..
 
-# Czmod for z.lua
-git pull --rebase https://github.com/skywind3000/czmod.git
-sh czmod/build.sh
+# Czmod
+git clone https://github.com/skywind3000/czmod.git
+cd czmod && sh build.sh
+cd ..
 
-# applet-window-appmenu
-#sh applet-window-appmenu/install.sh
-
-########################################################
-
-# appimages
-#curl https://raw.githubusercontent.com/srevinsaju/zap/main/install.sh | bash -s
-#zap install vscodium
-
-########################################################
+# Koi
+# git clone https://github.com/baduhai/Koi.git
+# cmake -S "./Koi/src/" -B "./Koi/src/build/"
+# sudo make -C "./Koi/src/build/"
+# sudo make -C "./Koi/src/build/" install
 
 # Flatpak apps
 flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install flathub org.standardnotes.standardnotes \
-  com.github.Eloston.UngoogledChromium \
-  net.ankiweb.Anki \
-  org.onlyoffice.desktopeditors \
-  com.github.tchx84.Flatseal \
-  io.github.kotatogram \
-  us.zoom.Zoom \ 
-  com.jetbrains.CLion \ 
-  io.github.spacingbat3.webcord \
-  com.tdameritrade.ThinkOrSwim
+flatpak install -y flathub org.standardnotes.standardnotes \
+    net.ankiweb.Anki \
+    org.onlyoffice.desktopeditors \
+    com.github.tchx84.Flatseal \
+    org.telegram.desktop \
+    us.zoom.Zoom \
+    org.getmonero.Monero \
+    io.gitlab.librewolf-community \
+    com.spotify.Client \
+    com.mastermindzh.tidal-hifi \
+    com.logseq.Logseq \
+    com.google.Chrome
+
+# Additional scripts
+curl -f https://zed.dev/install.sh | sh
+bash <(curl -sSL https://spotx-official.github.io/run.sh)

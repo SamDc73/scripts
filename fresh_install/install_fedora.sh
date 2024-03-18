@@ -1,58 +1,131 @@
-dnf install https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
-dnf copr enable varlad/onefetch -y
+#!/bin/bash
 
-dnf install neovim yt-dlp python3-pip latte-dock zsh kitty neofetch brightnessctl \
-  kvantum cargo mpv ranger bismuth calibre kolourpaint kcolorchooser trash-cli neofetch picard \
-  gsettings-desktop-schemas gsettings-qt qt5ct lxappearance megatools qt5-qtstyleplugins \
-  timeshift power-profiles-daemon git-core musl-gcc harfbuzz cheat fzf \
-  ripgrep bat htop ktouch ffmpeg ffmpegthumbnailer python3-bpython xonsh \
-  black qalculate perl-Image-ExifTool fd-find odt2txt dash onefetch python3-jupyter-core python3-notebook \
-  aria2 lsd gnome-settings-daemon httrack svt-av1 wget2 touchegg nvtop transmission-qt npm \
-  torbrowser-launcher tldr git syncthing gh -y
+
+# Exit on any error
+set -e
+
+# Function to check NVIDIA driver
+check_nvidia() {
+    echo "----------------------------------------"
+    echo "Checking NVIDIA driver status..."
+    if ! modinfo -F version nvidia > /dev/null 2>&1; then
+        echo "⚠️  Warning: NVIDIA driver is NOT loaded!"
+        echo "Please wait a few minutes for the driver to build"
+        echo "You can check status with: modinfo -F version nvidia"
+    else
+        echo "✅ NVIDIA driver is loaded successfully!"
+        echo "Driver version: $(modinfo -F version nvidia)"
+    fi
+    echo "----------------------------------------"
+}
+
+
+check_docker() {
+    echo "----------------------------------------"
+    echo "Checking Docker status..."
+    if systemctl is-active --quiet docker; then
+        echo "✅ Docker service is running"
+    else
+        echo "⚠️  Warning: Docker service is NOT running"
+    fi
+
+    if groups $USER | grep &>/dev/null '\bdocker\b'; then
+        echo "✅ User $USER is in docker group"
+    else
+        echo "⚠️  Warning: User $USER is NOT in docker group"
+    fi
+    echo "----------------------------------------"
+}
+
+
+# Initial status check
+check_nvidia
+check_docker
+
+
+# Enable non-interactive mode for dnf
+echo "defaultyes=True" >> /etc/dnf/dnf.conf
+
+# Update system first
+dnf update -y
+
+# RPM Fusion
+dnf install -y https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
+               https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
+
+
+# Main packages
+dnf install -y neovim yt-dlp python3-pip zsh kitty neofetch  \
+    kvantum cargo mpv ranger calibre kolourpaint kcolorchooser \
+    gsettings-desktop-schemas gsettings-qt qt5ct lxappearance megatools qt5-qtstyleplugins \
+    git-core musl-gcc harfbuzz cheat fzf \
+    ripgrep bat htop ktouch ffmpeg ffmpegthumbnailer \
+    fd-find dash python3-jupyter-core python3-notebook \
+    aria2 lsd httrack svt-av1 wget2 touchegg transmission-qt npm \
+    torbrowser-launcher tldr syncthing ytfzf pipx \
+    ruff uv direnv python3-distutils-extra xclip jq curl \
+    --skip-unavailable  --skip-broken
+
 
 # VSCodium
-rpmkeys --import https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/-/raw/master/pub.gpg
-printf "[gitlab.com_paulcarroty_vscodium_repo]\nname=download.vscodium.com\nbaseurl=https://download.vscodium.com/rpms/\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/-/raw/master/pub.gpg\nmetadata_expire=1h" | sudo tee -a /etc/yum.repos.d/vscodium.repo 
-dnf install codium
+rpm --import https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/-/raw/master/pub.gpg
+printf "[gitlab.com_paulcarroty_vscodium_repo]\nname=download.vscodium.com\nbaseurl=https://download.vscodium.com/rpms/\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/-/raw/master/pub.gpg\nmetadata_expire=1h" | tee /etc/yum.repos.d/vscodium.repo
+dnf install -y codium
 
-# Neomutt :
-# dnf copr enable flatcap/neomutt -y
-# dnf install neomutt pass msmtp isync -y
-
-# Wayland Dependend
-# dnf install slurp rofi-wayland clipman wtype wl-clipboard -y
-
-# X11 Dependend
-# dnf install picom xclip xdotool -y
+# Mulvad
+dnf config-manager addrepo --from-repofile=https://repository.mullvad.net/rpm/stable/mullvad.repo --overwrite
+dnf install -y mullvad-vpn
 
 # Touch Screen
-dnf install onboard -y
+# dnf install onboard -y
 
-# Nvidia
-dnf install gwe mate-optimus -y
-dnf install akmod-nvidia -y
-dnf install xorg-x11-drv-nvidia-cuda -y
-dnf copr enable sunwire/envycontrol - y
-sudo dnf install python3-envycontrol - y
-sudo systemctl enable nvidia-{suspend,resume,hibernate}
-sudo ln -s /dev/null /etc/udev/rules.d/61-gdm.rules
+
+# Nvidia drivers
+dnf install -y akmod-nvidia xorg-x11-drv-nvidia-cuda vulkan
+
+# Nvidia drivers tools
+dnf copr enable -y sunwire/envycontrol
+dnf install -y python3-envycontrol nvtop gwe
+
+# Nvidia suspend
+dnf install -y xorg-x11-drv-nvidia-power
+systemctl enable nvidia-{suspend,resume,hibernate}
+
+# Enable kernel modeset for better performance
+sudo grubby --update-kernel=ALL --args='nvidia-drm.modeset=1'
 
 # For gaming
-dnf install wine winetricks wine-mono lutris -y
+# dnf install -y wine winetricks wine-mono lutris vulkan
 
-# Codecs
-dnf groupupdate multimedia --setop="install_weak_deps=False" --exclude=PackageKit-gstreamer-plugin --allowerasing
-dnf groupupdate sound-and-video
+# Multimedia codecs
+dnf groupupdate -y multimedia --setop="install_weak_deps=False" --exclude=PackageKit-gstreamer-plugin --allowerasing
+dnf groupupdate -y sound-and-video
+dnf install -y xorg-x11-drv-nvidia-cuda-libs nvidia-vaapi-driver libva-utils vdpauinfo #nvidia specific
 
-# pyenv dependecies
-# dnf install make gcc zlib-devel bzip2 bzip2-devel readline-devel sqlite sqlite-devel openssl-devel tk-devel libffi-devel xz-devel -y
 
 #Docker
-sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo -y
-sudo dnf install -y docker-ce docker-ce-cli containerd.io -y
-sudo systemctl enable docker
-sudo systemctl start docker
-sudo usermod -aG docker samdc
+dnf install -y dnf-plugins-core
+dnf config-manager addrepo --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo
+dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+systemctl enable --now docker
+getent group docker || groupadd docker
+usermod -aG docker $USER
 
-# Remove Bloat
-# dnf remove krfb akregator elisa-player krdc krdc-libs kmines dnfdragora kmines kruler kmahjongg kmag konsole5-part konsole5-part plasma-discover -y
+# Remove Bloat (KDE spin)
+# dnf remove -y krfb akregator elisa-player krdc krdc-libs kmines dnfdragora kmines kruler kmahjongg kmag konsole5-part konsole5-part plasma-discover
+
+
+# External packages
+rpm -i https://github.com/baduhai/Koi/releases/download/0.3.1/Koi-0.3.1-1--FEDORA.x86_64.rpm
+
+
+# Final status check
+check_nvidia
+check_docker
+
+
+#verify
+# verify NVIDIA driver
+# modinfo -F version nvidia
+# Docker
+# docker run hello-world
