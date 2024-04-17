@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import re
+from datetime import datetime
+import yt_dlp
+import requests
+from litellm import completion
+
+def get_video_info(url):
+    ydl_opts = {'quiet': True}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    return info
+
+def generate_tags(title, description):
+    prompt = f"Generate 2-3 relevant tags for a YouTube video with the following title and description:\nTitle: {title}\nDescription: {description}\nProvide the tags as a comma-separated list."
+    response = completion(
+        model="openai/gpt-4",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    tags = [tag.strip() for tag in response.choices[0].message.content.split(',')]
+    return tags
+
+def create_markdown(info, tags):
+    title = info['title']
+    channel = info['channel']
+    video_id = info['id']
+    year = datetime.strptime(info['upload_date'], '%Y%m%d').year
+    
+    content = f"""title:: {title}
+full-title:: {title}
+Channel:: [[{channel}]]
+Youtube-id:: {video_id}
+Year:: {year}
+Tags:: {' '.join(['[[' + tag + ']]' for tag in tags])}
+"""
+    
+    filename = re.sub(r'[^\w\-_\. ]', '', title)
+    filepath = os.path.expanduser(f"~/Notes/logseq/pages/{filename}.md")
+    
+    with open(filepath, 'w') as f:
+        f.write(content)
+    
+    print(f"Markdown file created: {filepath}")
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: ytmetagen <YouTube_URL>")
+        sys.exit(1)
+    
+    url = sys.argv[1]
+    info = get_video_info(url)
+    tags = generate_tags(info['title'], info['description'])
+    create_markdown(info, tags)
+
+if __name__ == "__main__":
+    main()
