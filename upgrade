@@ -4,6 +4,17 @@
 # GitHub repo for other scripts: github.com/SamDc73/scripts
 # Brief:  one command to upgrade all your apps on Fedora and perform system maintenance
 
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"
+}
+
+run_command() {
+    echo "Running: $*"
+    if ! eval "$@"; then
+        log "Error: Command failed: $*"
+        return 1
+    fi
+}
 
 update_dnf() {
     run_command "sudo dnf upgrade -y"
