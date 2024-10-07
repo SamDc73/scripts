@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+
+# Created by: samdc73 (github | twitter | samdc73.com)
+# dependencies: fzf, ytfzf, mpv, xdg-open
+# brief: A script to help you learn programming concepts by randomly selecting a concept or a resource to learn.
+# github repo for other scripts: https://github.com/SamDc73/scripts
+# How to use it:
+#   Create a markdown file with a list of programming concepts and resources.
+#   Run the script to randomly select a concept or resource to learn.
+#   Optionally, you can add a search term to search for a specific video: ./learn-o1.py -s "search term"
+
+
+import os
+import random
+import subprocess
+import yaml
+from urllib.parse import urlparse
+import re
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional
+
+# Constants
+MARKDOWN_FILE = Path("/home/samdc/Notes/logseq/pages/Programming concepts.md")
+HISTORY_FILE = Path("/home/samdc/Notes/logseq/pages/history.yaml")
+
+
+########################
+### User Interaction ###
+########################
+def prompt_yes_no(prompt, default="yes"):
+    valid_responses = {"y": True, "yes": True, "n": False, "no": False}
+    if default == "yes":
+        prompt += " [Y/n]: "
+    else:
+        prompt += " [y/N]: "
+
+    while True:
+        response = input(prompt).strip().lower()
+        if response == "":
+            return default == "yes"
+        if response in valid_responses:
+            return valid_responses[response]
+        print("Please enter 'y' or 'n'.")
+
+
+def handle_link_item(content, items, history):
+    is_new_item = content not in history
+    print_access_info(content, is_new_item, history)
+    launch_content(content)
+
+    if is_new_item:
+        if prompt_yes_no("Move this item to the history list?"):
+            history[content] = {"count": 1}
+            items[:] = [item for item in items if item["content"] != content]
+            print("Item moved to history list and counter initialized.")
+        else:
+            print("Item kept in programming concepts list.")
+    else:
+        if prompt_yes_no("Increment the access counter?"):
+            history[content]["count"] += 1
+            print(
+                f"Counter incremented. This item has been accessed {history[content]['count']} time(s)."
+            )
+
+        if not prompt_yes_no("Keep this item in the history list?"):
+            del history[content]
+            print("Item removed from history list.")
+        else:
+            print("Item kept in history list.")
+
+
+def handle_concept_item(content, items, history):
+    if content.startswith("http"):
+        print(f"Opening link: {content}")
+        launch_article(content)
+    else:
+        print(f"Searching for resources for concept: {content}")
+        video_played, video_url = search_with_ytfzf(content)
+        if video_played:
+            if video_url:
+                print(f"Selected video for concept '{content}': {video_url}")
+                update_history(video_url, history)
+                items.append({"type": "link", "content": video_url})
+            else:
+                print("Video played but URL not captured.")
+        else:
+            print(f"No video selected for concept '{content}'.")
+
+
+def print_access_info(content, is_new_item, history):
+    if is_new_item:
+        print("This item hasn't been accessed before.")
+    else:
+        count = history[content]["count"]
+        print(f"This item has been accessed {count} time(s) before.")
+
+
+#####################
+# File Operations####
+#####################
+def load_yaml(file_path: Path) -> Dict:
+    try:
+        if file_path.exists():
+            with file_path.open("r") as f:
+                return yaml.safe_load(f) or {}
+    except IOError as e:
+        print(f"Error reading file {file_path}: {e}")
+    return {}
+
+
+def save_yaml(data: Dict, file_path: Path) -> None:
+    try:
+        with file_path.open("w") as f:
+            yaml.safe_dump(data, f)
+    except IOError as e:
+        print(f"Error writing to file {file_path}: {e}")
+
+
+def parse_markdown(file_path: Path) -> List[Dict[str, str]]:
+    items = []
+    with file_path.open("r") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("- "):
+                content = line[2:].strip()
+                match = re.match(r"\[(.*?)\]\((.*?)\)", content)
+                if match or content.startswith("http"):
+                    items.append(
+                        {
+                            "type": "link",
+                            "content": match.group(2) if match else content,
+                        }
+                    )
+                else:
+                    items.append({"type": "concept", "content": content})
+    return items
+
+
+def save_markdown(items: List[Dict[str, str]], file_path: Path) -> None:
+    with file_path.open("w") as f:
+        for item in items:
+            f.write(f"- {item['content']}\n")
+
+
+################################
+### URL and Content Handling ###
+################################
+def is_youtube_link(url):
+    parsed = urlparse(url)
+    return "youtube.com" in parsed.netloc or "youtu.be" in parsed.netloc
+
+
+def is_article(url):
+    return not is_youtube_link(url)
+
+
+def get_random_item(
+    items: List[Dict[str, str]], history: Dict
+) -> Optional[Dict[str, str]]:
+    if not items:
+        return None
+    weighted_items = [
+        item
+        for item in items
+        for _ in range(
+            3 if item["type"] == "link" and item["content"] not in history else 1
+        )
+    ]
+    return random.choice(weighted_items) if weighted_items else None
+
+
+#########################
+### Content Launching ###
+#########################
+def launch_video(url):
+    try:
+        subprocess.run(
+            ["mpv", "--ytdl-format=bestvideo[height<=?720]+bestaudio/best", url],
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Error playing video: {e}")
+
+
+def launch_article(url):
+    try:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("BASH_FUNC_")}
+        subprocess.run(["xdg-open", url], check=True, env=env)
+    except subprocess.CalledProcessError as e:
+        print(f"Error opening article: {e}")
+
+
+def launch_content(content):
+    if is_youtube_link(content):
+        print(f"Selected Video: {content}")
+        launch_video(content)
+    else:
+        print(f"Selected Article: {content}")
+        launch_article(content)
+
+
+def search_with_ytfzf(query):
+    try:
+        result = subprocess.run(
+            ["ytfzf", "-t", "-T", "kitty", "--region=US", query], check=True
+        )
+        output_lines = result.stdout.strip().split("\n")
+        if output_lines and output_lines[-1].startswith("http"):
+            return True, output_lines[-1]
+        return False, None
+    except subprocess.CalledProcessError as e:
+        print(f"Error searching with ytfzf: {e}")
+        return False, None
+
+
+##########################
+### History Management ###
+##########################
+def update_history(url, history):
+    history[url] = {"count": 1}
+
+
+def handle_empty_items(history):
+    print("No items in programming concepts. Please enter a search term:")
+    search_term = input().strip()
+    video_played, video_url = search_with_ytfzf(search_term)
+    if video_played:
+        if video_url:
+            print(f"Playing video: {video_url}")
+            launch_video(video_url)
+            update_history(video_url, history)
+        else:
+            print("Video played but URL not captured.")
+    else:
+        print("No video was selected or played.")
+
+
+######################
+#### Main Function ###
+######################
+def main():
+    items = parse_markdown(MARKDOWN_FILE)
+    history = load_yaml(HISTORY_FILE)
+
+    if len(sys.argv) > 2 and (sys.argv[1] == "-s" or sys.argv[1] == "--search"):
+        search_term = " ".join(sys.argv[2:])
+        print(f"Searching for: {search_term}")
+        video_played, video_url = search_with_ytfzf(search_term)
+        if video_played:
+            if prompt_yes_no("Add this video to the history?"):
+                if video_url:
+                    update_history(video_url, history)
+                    print("Video URL added to history.")
+                else:
+                    update_history(f"ytfzf search: {search_term}", history)
+                    print("Search term added to history.")
+        else:
+            print("No video was selected or played.")
+        save_yaml(history, HISTORY_FILE)
+        return
+
+    if not items:
+        handle_empty_items(history)
+        save_yaml(history, HISTORY_FILE)
+        return
+
+    selected_item = get_random_item(items, history)
+    if not selected_item:
+        print("No items available.")
+        return
+
+    content = selected_item["content"]
+
+    if selected_item["type"] == "link" or content.startswith("http"):
+        handle_link_item(content, items, history)
+    else:  # concept
+        handle_concept_item(content, items, history)
+
+    save_markdown(items, MARKDOWN_FILE)
+    save_yaml(history, HISTORY_FILE)
+
+
+if __name__ == "__main__":
+    main()
