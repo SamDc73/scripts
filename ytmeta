@@ -17,7 +17,7 @@ def get_video_info(url):
 def generate_tags(title, description):
     prompt = f"Generate 2-3 relevant tags for a YouTube video with the following title and description:\nTitle: {title}\nDescription: {description}\nProvide the tags as a comma-separated list."
     response = completion(
-        model="openai/gpt-4",
+        model="openai/gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}]
     )
     tags = [tag.strip() for tag in response.choices[0].message.content.split(',')]
