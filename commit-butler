@@ -1,0 +1,153 @@
+#!/bin/bash
+echo -e "\033[32mWelcome to the AI Commit Message Tool!\033[0m"
+
+# Get base directory (where the script is located)
+baseDir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+workingDir="$(pwd)"
+
+# Use default editor if $EDITOR is not set
+EDITOR="${EDITOR:-nano}"
+
+# Load environment variables from script location
+if [ -f "$baseDir/.env" ]; then
+    source "$baseDir/.env"
+else
+    echo "Error: .env file not found in $baseDir"
+    echo "Looking in: $baseDir"
+    exit 1
+fi
+
+# Check if path argument is provided
+if [ $# -eq 0 ]; then
+    echo "Error: Please provide a path"
+    echo "Usage: $(basename $0) <path/to/folder>"
+    exit 1
+fi
+
+target_path="$1"
+
+# Validate if path exists
+if [ ! -e "$target_path" ]; then
+    echo "Error: Path '$target_path' does not exist"
+    exit 1
+fi
+
+# Add the specified path
+git add "$target_path" 2>/dev/null || {
+    echo "Error: Failed to stage changes for $target_path"
+    exit 1
+}
+
+# Get git context information with error handling
+git_context="Current Status: $(git status "$target_path" 2>/dev/null || echo 'No status available') \
+            \nFiles Changed (with stats): $(git diff --staged --stat "$target_path" 2>/dev/null || echo 'No changes') \
+            \nFile types modified: $(git diff --staged --name-only "$target_path" 2>/dev/null | sed 's/.*\.//' | sort -u) \
+            \nDirectories affected: $(git diff --staged --name-only "$target_path" 2>/dev/null | xargs -I{} dirname {} 2>/dev/null | sort -u) \
+            \nPrevious commit message: $(git log -1 --pretty=%B 2>/dev/null || echo 'No previous commits')"
+
+
+# Prompt
+description=$(cat <<"EOF"
+## Role: AI Git Commit Tools
+## Background:
+As an AI Git Commit Tools, I create commit messages focusing on WHY changes were made rather than WHAT was changed.
+
+## Rules:
+- Format: <type>: <why this change was needed>
+- Keep it under 2 lines total
+- Focus on intention and purpose, not file changes
+- Be concise but meaningful
+
+- Types:
+  feat: new feature
+  fix: bug fix
+  docs: documentation
+  style: formatting
+  refactor: code restructuring
+  test: adding tests
+  chore: maintenance
+
+## Examples:
+Bad: "feat: add user.js and update routes"
+Good: "feat: enable user authentication for premium features"
+
+Bad: "fix: modify database queries"
+Good: "fix: prevent timeout on large dataset queries"
+
+## Output Format:
+Return only the commit message in format:
+<type>: <why>
+[optional second line for extra context if needed]
+EOF
+)
+
+# API configuration
+api_url="https://api.openai.com/v1/chat/completions"
+api_key="$OPENAI_API_KEY"
+
+# Add timestamp to context
+current_time="$(date '+%Y-%m-%d %H:%M:%S')"
+git_context="Timestamp: $current_time\n$git_context"
+
+# Generate JSON request body
+BODY_DATA=$(jq -n \
+  --arg description "$description" \
+  --arg git_context "$git_context" \
+  --arg model "$OPENAI_MODEL" \
+  '{
+     "model": $model,
+     "messages": [
+       {
+         "role": "system",
+         "content": $description
+       },
+       {
+         "role": "user",
+         "content": $git_context
+       }
+     ],
+     "temperature": 1,
+     "max_tokens": 1024,
+     "top_p": 1,
+     "frequency_penalty": 0,
+     "presence_penalty": 0
+   }')
+
+# Make API request
+response=$(curl -s -X POST $api_url \
+--header "Authorization: Bearer $api_key" \
+--header "Content-Type: application/json" \
+--data-raw "$BODY_DATA")
+
+# Extract commit message from response
+commit_msg=$(echo $response | jq -r '.choices[0].message.content // empty')
+
+# Save to temporary file with timestamp
+date_str=$(date '+%Y-%m-%d_%H:%M:%S')
+file_path="/tmp/.ai_commit_$date_str"
+echo "$commit_msg" > $file_path
+
+# Use $EDITOR
+"$EDITOR" "$file_path"
+
+# Prompt for confirmation
+echo -e "\033[32mGenerating commit message...\033[0m"
+echo -e "\033[1;37m$(cat $file_path)\033[0m"
+echo -e "\033[32mDo you want to use this commit message? [Y/n]\033[0m"
+
+read -r -p "" answer
+
+# Process user response
+case ${answer:=Y} in     # Default to Y if Enter is pressed
+    [Yy]|"")            # Match Y, y, or empty (Enter)
+        git commit -F $file_path
+        echo -e "\033[32mCommit successful.\033[0m"
+        ;;
+    *)
+        echo -e "\033[31mCommit cancelled.\033[0m"
+        git reset "$target_path"
+        ;;
+esac
+
+# Cleanup
+rm $file_path
