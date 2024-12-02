@@ -1,59 +1,79 @@
-#!/usr/bin/env python3
+#!/bin/bash
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 <YouTube_URL>"
+    exit 1
+fi
 
-import sys
-import os
-import re
-from datetime import datetime
-import yt_dlp
-import requests
-from litellm import completion
+URL="$1"
+# Load environment variables
+source .env
 
-def get_video_info(url):
-    ydl_opts = {'quiet': True}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-    return info
+# Get video info in JSON format
+VIDEO_INFO=$(yt-dlp -j "$URL")
 
-def generate_tags(title, description):
-    prompt = f"Generate 2-3 relevant tags for a YouTube video with the following title and description:\nTitle: {title}\nDescription: {description}\nProvide the tags as a comma-separated list."
-    response = completion(
-        model="openai/gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    tags = [tag.strip() for tag in response.choices[0].message.content.split(',')]
-    return tags
+# Extract required fields
+TITLE=$(echo "$VIDEO_INFO" | jq -r '.title')
+CHANNEL=$(echo "$VIDEO_INFO" | jq -r '.channel')
+VIDEO_ID=$(echo "$VIDEO_INFO" | jq -r '.id')
+UPLOAD_DATE=$(echo "$VIDEO_INFO" | jq -r '.upload_date')
+DESCRIPTION=$(echo "$VIDEO_INFO" | jq -r '.description')
+YEAR=$(echo "$UPLOAD_DATE" | cut -c1-4)
 
-def create_markdown(info, tags):
-    title = info['title']
-    channel = info['channel']
-    video_id = info['id']
-    year = datetime.strptime(info['upload_date'], '%Y%m%d').year
-    
-    content = f"""title:: {title}
-full-title:: {title}
-Channel:: [[{channel}]]
-Youtube-id:: {video_id}
-Year:: {year}
-Tags:: {' '.join(['[[' + tag + ']]' for tag in tags])}
-"""
-    
-    filename = re.sub(r'[^\w\-_\. ]', '', title)
-    filepath = os.path.expanduser(f"~/Notes/logseq/pages/{filename}.md")
-    
-    with open(filepath, 'w') as f:
-        f.write(content)
-    
-    print(f"Markdown file created: {filepath}")
+# Generate tags using OpenAI API
+PROMPT="Generate 2-3 relevant tags for a YouTube video with the following title and description:\nTitle: $TITLE\nDescription: $DESCRIPTION\nProvide the tags as a comma-separated list."
 
-def main():
-    if len(sys.argv) != 2:
-        print("Usage: ytmetagen <YouTube_URL>")
-        sys.exit(1)
-    
-    url = sys.argv[1]
-    info = get_video_info(url)
-    tags = generate_tags(info['title'], info['description'])
-    create_markdown(info, tags)
+# Properly escape the JSON payload
+ESCAPED_PROMPT=$(printf '%s' "$PROMPT" | jq -R -s '.')
 
-if __name__ == "__main__":
-    main()
+TAGS=$(curl -s https://api.openai.com/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d "{
+    \"model\": \"$OPENAI_MODEL\",
+    \"messages\": [{\"role\": \"user\", \"content\": $ESCAPED_PROMPT}],
+    \"temperature\": 0.7
+  }" | jq -r '.choices[0].message.content')
+
+# Debug output
+echo "Generated tags: $TAGS"
+
+# Check if tags were actually generated
+if [ -z "$TAGS" ] || [ "$TAGS" = "null" ]; then
+    echo "Error generating tags. API response was empty or null"
+    exit 1
+fi
+
+# Convert tags to [[tag]] format (without quotes)
+FORMATTED_TAGS=$(echo "$TAGS" | tr ',' '\n' | sed 's/^ *//g' | sed 's/ *$//g' | sed 's/.*/[[\0]]/' | tr '\n' ' ')
+
+# Create clean filename (improved version)
+CLEAN_TITLE=$(echo "$TITLE" | tr -cs '[:alnum:].-' '_' | sed 's/__*/_/g' | sed 's/_$//')
+
+# Before creating markdown file, check if it exists
+MD_FILE=~/Notes/logseq/pages/"$CLEAN_TITLE".md
+if [ -f "$MD_FILE" ]; then
+    echo "Markdown file already exists: $MD_FILE - Skipping creation"
+else
+    # Create markdown file only if it doesn't exist
+    cat > "$MD_FILE" << EOF
+title:: $TITLE
+full-title:: $TITLE
+Channel:: [[$CHANNEL]]
+Youtube-id:: $VIDEO_ID
+Year:: $YEAR
+Tags:: $FORMATTED_TAGS
+EOF
+    echo "Markdown file created: $MD_FILE"
+fi
+
+# Download and process transcript
+yt-dlp --skip-download --write-subs --write-auto-subs --sub-lang en --sub-format ttml \
+    --convert-subs srt \
+    --exec "before_dl:sed -e '/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9] --> [0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]$/d' \
+                         -e '/^[[:digit:]]\{1,6\}$/d' \
+                         -e 's/<[^>]*>//g' \
+                         -e '/^[[:space:]]*$/d' \
+                         -i '' %(requested_subtitles.:.filepath)#q" "$URL"
+
+# Move transcript file to final location
+mv *.en.srt ~/"${VIDEO_ID}.txt" 2>/dev/null || echo "No transcript available for this video"
