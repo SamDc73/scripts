@@ -94,6 +94,9 @@ update_librechat() {
     fi
 }
 
+update_uv() {
+  uv tool upgrade --all
+}
 
 main() {
     log "Starting system update and maintenance"
@@ -104,6 +107,7 @@ main() {
     update_firmware || log "Firmware update failed"
     update_grub || log "System maintenance failed"
     update_librechat || log "LibreChat update failed"
+    updated_uv || log "UV tools updated failed"
 
     log "System update and maintenance completed"
 }
