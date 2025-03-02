@@ -1,168 +1,377 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
-# Set strict error handling
-set -euo pipefail
+# Created by: samdc73 (github | twitter | samdc73.com)
+# GitHub repo for other scripts: github.com/SamDc73/scripts
+# Brief: easier way to upload large codebase files to chatgpt
+# dependecnies: ripgrep, cuda, tiktoken (python package), poppler
 
-output_file="output.txt"
-input_dir="."
-copy_to_clipboard=false
-SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-PYTHON_COUNTER="${SCRIPT_DIR}/count_tokens.py"
+generate_tree_structure() {
+    local paths=("$@")
+    for path in "${paths[@]}"; do
+        if [ -f "$path" ]; then
+            echo "$(basename "$path")"
+        elif [ -d "$path" ]; then
+            # Use fd if available, fall back to find
+            if command -v fd &> /dev/null; then
+                fd --type d --type f . "$path" --exec bash -c '
+                    item="$1"
+                    path="$2"
+                    if [ -d "$item" ]; then
+                        level=$(echo "$item" | sed -e "s|^$path||" | tr -cd "/" | wc -c)
+                        indent=$(printf "%*s" $((level * 4)) "")
+                        echo "${indent}$(basename "$item")/"
+                    elif [ -f "$item" ]; then
+                        parent_dir=$(dirname "$item")
+                        level=$(echo "$parent_dir" | sed -e "s|^$path||" | tr -cd "/" | wc -c)
+                        indent=$(printf "%*s" $(((level + 1) * 4)) "")
+                        echo "${indent}$(basename "$item")"
+                    fi
+                ' {} "$path" | sort
+            else
+                find "$path" -type d -o -type f | sort | while read -r item; do
+                    if [ -d "$item" ]; then
+                        local level=$(echo "$item" | sed -e "s|^$path||" | tr -cd '/' | wc -c)
+                        local indent=$(printf "%*s" $((level * 4)) "")
+                        echo "${indent}$(basename "$item")/"
+                    elif [ -f "$item" ]; then
+                        local parent_dir=$(dirname "$item")
+                        local level=$(echo "$parent_dir" | sed -e "s|^$path||" | tr -cd '/' | wc -c)
+                        local indent=$(printf "%*s" $(((level + 1) * 4)) "")
+                        echo "${indent}$(basename "$item")"
+                    fi
+                done
+            fi
+        fi
+    done
+}
 
-# Function to copy to clipboard
-copy_to_clip() {
-    if command -v wl-copy >/dev/null 2>&1; then
-        wl-copy
-    elif command -v xclip >/dev/null 2>&1; then
-        xclip -selection clipboard
+# Check if pdftotext is available
+have_pdftotext=0
+if command -v pdftotext &> /dev/null; then
+    have_pdftotext=1
+fi
+
+process_file() {
+    local file_path="$1"
+    local file_type=$(file -b "$file_path")
+
+    # Handle PDF files if pdftotext is available
+    if [[ $have_pdftotext -eq 1 && "$file_type" == *"PDF document"* ]]; then
+        printf "### %s (PDF) ###\n" "$file_path"
+        # Use pdftotext with options for better formatting
+        # -layout preserves the original layout
+        # -nopgbrk removes page breaks
+        pdftotext -layout -nopgbrk "$file_path" - | head -n 1000 # Limit to first 1000 lines to avoid huge outputs
+        printf "\n--- End of file: %s ---\n" "$file_path"
+        return 0
+    # Handle text files
+    elif [[ "$file_type" == *"text"* ]]; then
+        printf "### %s ###\n" "$file_path"
+        cat "$file_path"
+        printf "\n--- End of file: %s ---\n" "$file_path"
+        return 0
+    # Handle PDF files when pdftotext is not available
+    elif [[ "$file_type" == *"PDF document"* ]]; then
+        printf "### %s (PDF) ###\n" "$file_path"
+        printf "PDF file detected but pdftotext is not installed. Please install poppler-utils to extract PDF content.\n"
+        printf "\n--- End of file: %s ---\n" "$file_path"
+        return 1
+    # Handle other files
     else
-        echo "Neither wl-copy nor xclip found. Please install one of them for clipboard support."
+        printf "%s\n" "$file_path"
+        printf "Failed to process file: Not a text file or supported format.\n"
         return 1
     fi
 }
 
-# Create Python counter script if it doesn't exist
-if [[ ! -f "$PYTHON_COUNTER" ]]; then
-    cat > "$PYTHON_COUNTER" << 'EOF'
-#!/usr/bin/env python3
+write_content_to_file() {
+    local output_file="$1"
+    shift
+    local input_paths=("$@")
+
+    local total_files=0
+    local copied_files=0
+
+    # Generate tree structure
+    generate_tree_structure "${input_paths[@]}" > "$output_file"
+    echo "" >> "$output_file"
+
+    # Create a list of files to process using ripgrep if available
+    local file_list=()
+
+    for path in "${input_paths[@]}"; do
+        if [ -f "$path" ]; then
+            file_list+=("$path")
+        elif [ -d "$path" ]; then
+            if command -v rg &> /dev/null; then
+                # Use ripgrep to find files, excluding binary files and specified patterns
+                # but include PDF files
+                local exclude_args=()
+                for pattern in "${exclude_patterns[@]}"; do
+                    # Skip PDF exclusion if we want to include PDFs
+                    if [[ "$pattern" != *".pdf"* ]]; then
+                        exclude_args+=(-g "!$pattern")
+                    fi
+                done
+
+                while IFS= read -r file; do
+                    # Include the file if it's a text file or a PDF
+                    if file -b "$file" | grep -q -E "text|PDF document"; then
+                        file_list+=("$file")
+                    fi
+                done < <(rg --files "${exclude_args[@]}" "$path")
+            elif command -v fd &> /dev/null; then
+                # Use fd as a faster alternative to find
+                local exclude_args=()
+                for pattern in "${exclude_patterns[@]}"; do
+                    # Skip PDF exclusion if we want to include PDFs
+                    if [[ "$pattern" != *".pdf"* ]]; then
+                        exclude_args+=("--exclude" "$pattern")
+                    fi
+                done
+
+                while IFS= read -r file; do
+                    # Include the file if it's a text file or a PDF
+                    if file -b "$file" | grep -q -E "text|PDF document"; then
+                        file_list+=("$file")
+                    fi
+                done < <(fd --type f "${exclude_args[@]}" . "$path")
+            else
+                # Fall back to find with grep for filtering
+                while IFS= read -r file; do
+                    local exclude_file=0
+                    for pattern in "${exclude_patterns[@]}"; do
+                        # Skip PDF exclusion if we want to include PDFs
+                        if [[ "$pattern" != *".pdf"* && "$file" =~ $pattern ]]; then
+                            exclude_file=1
+                            break
+                        fi
+                    done
+                    if [ $exclude_file -eq 0 ]; then
+                        # Include the file if it's a text file or a PDF
+                        if file -b "$file" | grep -q -E "text|PDF document"; then
+                            file_list+=("$file")
+                        fi
+                    fi
+                done < <(find "$path" -type f -not -path "*/\.*" 2>/dev/null)
+            fi
+        fi
+    done
+
+    # Process files with progress indicator
+    local file_count=${#file_list[@]}
+    local current=0
+
+    # Use GNU Parallel if available for parallel processing
+    if command -v parallel &> /dev/null; then
+        # Create a temporary directory for output files
+        local temp_dir=$(mktemp -d)
+
+        # Export the process_file function and variables so parallel can use them
+        export -f process_file
+        export have_pdftotext
+
+        # Process files in parallel
+        printf "Processing %d files in parallel...\n" "$file_count"
+        parallel --no-notice --silent \
+            "process_file {} > $temp_dir/{#}.txt" ::: "${file_list[@]}" 2>/dev/null
+
+        # Combine all output files
+        cat "$temp_dir"/*.txt >> "$output_file"
+
+        # Count successful files
+        total_files=$file_count
+        copied_files=$(grep -c "^### " "$output_file")
+
+        # Clean up
+        rm -rf "$temp_dir"
+    else
+        # Sequential processing with progress bar
+        for file in "${file_list[@]}"; do
+            ((total_files++))
+            ((current++))
+
+            # Progress bar
+            local percent=$((current * 100 / file_count))
+            local completed=$((percent / 2))
+            local remaining=$((50 - completed))
+
+            printf "\rProgress: [%s%s] %d%% (%d/%d files)" \
+                "$(printf '%0.s#' $(seq 1 $completed))" \
+                "$(printf '%0.s ' $(seq 1 $remaining))" \
+                "$percent" "$current" "$file_count"
+
+            # Process file
+            if process_file "$file" >> "$output_file"; then
+                ((copied_files++))
+            fi
+        done
+
+        echo ""
+    fi
+
+    echo "$total_files $copied_files"
+}
+
+# use tiktoken to count tokens:
+
+count_file_tokens() {
+    local file="$1"
+
+    token_count=$(python3 - <<EOF
+import torch
 import tiktoken
+from typing import List
+import math
 import sys
-import codecs
 
-def count_tokens(text):
-    try:
-        enc = tiktoken.get_encoding("cl100k_base")
-        tokens = enc.encode(text)
-        return len(tokens)
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 0
+class GPUTokenCounter:
+    def __init__(self, model_name='gpt-4', device='cuda'):
+        self.enc = tiktoken.get_encoding('cl100k_base')  # GPT-4 encoding
+        self.device = device
+        self.batch_size = 1024 * 1024  # 1MB base chunk size
+        self.max_gpu_chunks = 4  # Number of chunks to process simultaneously
 
-if __name__ == "__main__":
-    sys.stdin = codecs.getreader('utf-8')(sys.stdin.buffer, errors='ignore')
-    text = sys.stdin.read()
-    print(count_tokens(text))
+        # Calculate optimal batch size based on available VRAM
+        gpu_mem = torch.cuda.get_device_properties(0).total_memory
+        self.batch_size = min(self.batch_size, (gpu_mem * 0.7) // 4)  # Use 70% of available VRAM
+
+    def _batch_encode(self, text_chunks: List[str]) -> int:
+        total_tokens = 0
+
+        # Convert text chunks to tensor operations
+        with torch.cuda.stream(torch.cuda.Stream()):
+            for chunk in text_chunks:
+                # Encode on CPU first
+                tokens = self.enc.encode(chunk)
+
+                # Move to GPU for counting
+                tokens_tensor = torch.tensor(tokens, device=self.device)
+                total_tokens += len(tokens_tensor)
+
+                # Clear GPU memory immediately
+                del tokens_tensor
+                torch.cuda.empty_cache()
+
+        return total_tokens
+
+    def count_tokens(self, text: str) -> int:
+        # Split text into optimal chunks
+        text_length = len(text)
+        chunk_size = self.batch_size
+        num_chunks = math.ceil(text_length / chunk_size)
+
+        # Process chunks in batches
+        total_tokens = 0
+        for i in range(0, num_chunks, self.max_gpu_chunks):
+            batch_chunks = [
+                text[j * chunk_size:(j + 1) * chunk_size]
+                for j in range(i, min(i + self.max_gpu_chunks, num_chunks))
+            ]
+            total_tokens += self._batch_encode(batch_chunks)
+
+        return total_tokens
+
+try:
+    # Check for CUDA availability
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA not available")
+
+    # Initialize counter with GPU
+    counter = GPUTokenCounter()
+
+    # Read and process file
+    with open('$file', 'r', encoding='utf-8', errors='ignore') as f:
+        text = f.read()
+        token_count = counter.count_tokens(text)
+
+    print(f"{token_count}")
+
+    # Print GPU stats
+    # gpu_stats = torch.cuda.get_device_properties(0)
+    # print(f"GPU: {gpu_stats.name} | VRAM: {gpu_stats.total_memory/1024**3:.1f}GB",
+    #       file=sys.stderr)
+
+except Exception as e:
+    print(f"Error: {str(e)}", file=sys.stderr)
+    print("0")
 EOF
-    chmod +x "$PYTHON_COUNTER"
-fi
-
-# Basic exclude patterns
-exclude_patterns=(
-    -not -path "*/\.git/*"
-    -not -path "*/node_modules/*"
-    -not -name "*.jpg"
-    -not -name "*.png"
-    -not -name "*.svg"
-    -not -name "*.bin"
-    -not -name "*.sqlite"
-    -not -name "*.toml"
-    -not -name ".gitignore"
-    -not -name ".ds_store"
 )
+
+    echo "$token_count"
+}
+
+
+input_paths=(".")
+output_file="output.txt"
+exclude_patterns=(
+    "node_modules/"
+    "\.git/"
+    "\.github/"
+    "build/"
+    "test/"
+    "\.gitignore"
+    "\.ds_store"
+    "\.jpg$"
+    "\.png$"
+    "\.svg$"
+    "database/"
+    "aider.*"
+    "__pycache__/"
+    "\.bin$"
+    "\.sqlite$"
+    "\.toml$"
+    "\.aider.*"
+    "\.venv/"
+    "poetry\.lock"
+    "\.pytest_cache/"
+    "\.python-version"
+)
+
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         -i|--input)
             shift
-            input_dir="$1"
-            shift
+            input_paths=()
+            while [[ $# -gt 0 && ! $1 =~ ^- ]]; do
+                input_paths+=("$1")
+                shift
+            done
+            if [ ${#input_paths[@]} -eq 0 ]; then
+                input_paths=(".")
+            fi
             ;;
         -o|--output)
             shift
-            output_file="$1.txt"
+            output_file="${1}.txt"
             shift
             ;;
-        -c|--clipboard)
-            copy_to_clipboard=true
+        -e|--exclude)
             shift
+            while [[ $# -gt 0 && ! $1 =~ ^- ]]; do
+                exclude_patterns+=("$1")
+                shift
+            done
             ;;
         *)
-            shift
+            echo "Unknown option: $1"
+            exit 1
             ;;
     esac
 done
 
-# Create temporary file for clipboard content
-temp_file=$(mktemp)
-trap 'rm -f "$temp_file"' EXIT
+# Execute the main function
+result=$(write_content_to_file "$output_file" "${input_paths[@]}" 2>/dev/null | grep -v "Processing")
+total_files=$(echo "$result" | awk '{print $1}' | grep -o '[0-9]\+')
 
-# Write tree structure
-{
-    echo "Directory Structure:"
-    echo "==================="
-    if command -v tree >/dev/null 2>&1; then
-        tree "$input_dir"
-    else
-        find "$input_dir" -type d -print | sed -e "s;[^/]*/;|____;g;s;____|; |;g"
-    fi
-    echo
-    echo "File Contents:"
-    echo "============="
-    echo
-} | tee "$output_file" > "$temp_file"
+# Count tokens silently
+token_count=$(count_file_tokens "$output_file" 2>/dev/null)
 
-# Initialize counters
-total_tokens=0
-copied_files=0
-
-# Create a temporary file for batching
-batch_file=$(mktemp)
-trap 'rm -f "$batch_file" "$temp_file"' EXIT
-
-# Process files in batches
-while IFS= read -r -d '' file; do
-    # Skip binary files and empty files
-    if [[ ! -s "$file" ]] || file "$file" | grep -q "binary"; then
-        continue
-    fi
-
-    # Process file content
-    if [[ -f "$file" ]]; then
-        content=$(cat "$file" | tr -d '\0' 2>/dev/null)
-
-        if [[ -n "$content" ]]; then
-            # Write content to output and temp files
-            {
-                echo "### $file ###"
-                echo
-                echo "$content"
-                echo
-                echo "--- End of file: $file ---"
-                echo
-            } | tee -a "$output_file" >> "$temp_file"
-
-            # Accumulate content for batch processing
-            batch_content+="$content"$'\n'
-            batch_size=$((batch_size + ${#content}))
-            ((copied_files++))
-
-            # Process batch if it reaches threshold
-            if ((batch_size >= BATCH_SIZE)); then
-                current_tokens=$(echo "$batch_content" | "$PYTHON_COUNTER")
-                total_tokens=$((total_tokens + current_tokens))
-                batch_content=""
-                batch_size=0
-            fi
-        fi
-    fi
-done < <(find "$input_dir" -type f "${exclude_patterns[@]}" -print0)
-
-
-
-# Count tokens for entire batch at once
-if [[ -n "$batch_content" ]]; then
-    current_tokens=$(echo "$batch_content" | "$PYTHON_COUNTER")
-    total_tokens=$((total_tokens + current_tokens))
+# Display single-line result
+if [[ "$token_count" =~ ^[0-9]+$ ]] && [[ "$total_files" =~ ^[0-9]+$ ]]; then
+    printf "\r📁 Files: %d | 🔤 Tokens: %d\n" "$total_files" "$token_count"
+else
+    printf "\r❌ Error processing files\n"
 fi
-
-# Copy to clipboard if requested
-if $copy_to_clipboard; then
-    if cat "$temp_file" | copy_to_clip; then
-        echo "Content copied to clipboard"
-    fi
-fi
-
-echo "Output written to $output_file"
-echo "Files processed: $copied_files"
-echo "Total GPT tokens: $total_tokens"
